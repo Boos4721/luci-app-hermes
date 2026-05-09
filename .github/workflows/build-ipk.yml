@@ -1,0 +1,113 @@
+name: Build & Release IPK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v2026.05.10)'
+        required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VER="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Inject version
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          echo "$VER" > VERSION
+          sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=${VER}/" Makefile
+
+      - name: Build IPK
+        id: build
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          PKG="luci-app-hermes"
+          RELEASE="1"
+          OUT_DIR="dist"
+          mkdir -p "$OUT_DIR"
+          STAGING=$(mktemp -d)
+
+          # data tree
+          DATA="$STAGING/data"
+          mkdir -p "$DATA"
+          cp -a root/. "$DATA/"
+          mkdir -p "$DATA/www"
+          cp -a htdocs/. "$DATA/www/"
+          mkdir -p "$DATA/usr/lib/lua/luci"
+          cp -a luasrc/. "$DATA/usr/lib/lua/luci/"
+          if [ -d po ]; then
+            mkdir -p "$DATA/usr/share/luci/i18n"
+            find po -name "*.po" -exec sh -c 'lang=$(basename $(dirname "$1")); cp "$1" "'"$DATA"'/usr/share/luci/i18n/'"$PKG"'."$lang".po"' _ {} \;
+          fi
+          chmod 755 "$DATA/etc/init.d/hermes" "$DATA/etc/uci-defaults/99-hermes" "$DATA/usr/bin/hermes-env" "$DATA/usr/share/hermes/luci-helper" "$DATA/usr/share/hermes/web-pty.py" 2>/dev/null || true
+          SIZE=$(du -sk "$DATA" | awk '{print $1}')
+          tar -C "$DATA" --numeric-owner --owner=0 --group=0 -czf "$STAGING/data.tar.gz" .
+
+          # control
+          CTRL="$STAGING/control"
+          mkdir -p "$CTRL"
+          printf 'Package: %s\nVersion: %s-%s\nArchitecture: all\nMaintainer: Boos4721\nDepends: luci-compat, luci-base, python3, python3-pip\nLicense: GPL-3.0\nSection: luci\nPriority: optional\nInstalled-Size: %s\nDescription: Hermes Agent AI Gateway LuCI plugin\n' "$PKG" "$VER" "$RELEASE" "$SIZE" > "$CTRL/control"
+          echo "/etc/config/hermes" > "$CTRL/conffiles"
+          printf '#!/bin/sh\n[ -n "${IPKG_INSTROOT}" ] || { rm -f /tmp/luci-indexcache /tmp/luci-modulecache/* 2>/dev/null; exit 0; }\n' > "$CTRL/postinst"
+          printf '#!/bin/sh\n[ -n "${IPKG_INSTROOT}" ] || { [ -f /etc/config/hermes ] && cp /etc/config/hermes /etc/config/hermes.pre-upgrade.bak 2>/dev/null; }\n' > "$CTRL/prerm"
+          printf '#!/bin/sh\n[ -n "${IPKG_INSTROOT}" ] || rm -f /tmp/luci-indexcache /tmp/luci-modulecache/* 2>/dev/null\n' > "$CTRL/postrm"
+          chmod 0755 "$CTRL/postinst" "$CTRL/prerm" "$CTRL/postrm"
+          tar -C "$CTRL" --numeric-owner --owner=0 --group=0 -czf "$STAGING/control.tar.gz" .
+
+          # pack ipk
+          echo "2.0" > "$STAGING/debian-binary"
+          IPK="${PKG}_${VER}-${RELEASE}_all.ipk"
+          tar -C "$STAGING" -czf "$OUT_DIR/$IPK" debian-binary control.tar.gz data.tar.gz
+          ls -lh "$OUT_DIR/$IPK"
+          echo "ipk=$IPK" >> "$GITHUB_OUTPUT"
+          rm -rf "$STAGING"
+
+      - name: Generate release notes
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          TAG="${{ steps.ver.outputs.tag }}"
+          CHANGES=$(git log --oneline -10 2>/dev/null)
+          echo "## luci-app-hermes $TAG" > release_notes.md
+          echo "" >> release_notes.md
+          echo '```' >> release_notes.md
+          echo "$CHANGES" >> release_notes.md
+          echo '```' >> release_notes.md
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-hermes-${{ steps.ver.outputs.version }}
+          path: dist/*.ipk
+          retention-days: 30
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          IPK="${{ steps.build.outputs.ipk }}"
+          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes 2>/dev/null || true
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "luci-app-hermes $TAG" --notes-file release_notes.md "dist/$IPK"

@@ -1,0 +1,39 @@
+#!/bin/sh
+# luci-app-hermes — First-boot setup (uci-defaults)
+# This runs once after package installation
+
+# Ensure config section exists
+uci -q get hermes_agent.main >/dev/null 2>&1 || {
+	uci -q batch << EOF
+set hermes_agent.main=hermes_agent
+set hermes_agent.main.enabled=0
+set hermes_agent.main.port=3000
+set hermes_agent.main.bind=lan
+set hermes_agent.main.api_endpoint=https://api.boos.lat/v1
+set hermes_agent.main.api_key=
+set hermes_agent.main.model=opus4.6
+set hermes_agent.main.pty_port=3001
+EOF
+}
+
+# Generate auth token if not set
+token=$(uci -q get hermes_agent.main.token || echo "")
+if [ -z "$token" ]; then
+	token=$(head -c 24 /dev/urandom | hexdump -e '24/1 "%02x"' 2>/dev/null || openssl rand -hex 24 2>/dev/null || echo "hermes_$(date +%s)")
+	uci -q set hermes_agent.main.token="$token"
+fi
+
+# Generate PTY token if not set
+pty_token=$(uci -q get hermes_agent.main.pty_token || echo "")
+if [ -z "$pty_token" ]; then
+	pty_token=$(head -c 16 /dev/urandom | hexdump -e '16/1 "%02x"' 2>/dev/null || openssl rand -hex 16 2>/dev/null || echo "pty_$(date +%s)")
+	uci -q set hermes_agent.main.pty_token="$pty_token"
+fi
+
+uci -q commit hermes_agent 2>/dev/null
+
+# Create required directories
+mkdir -p /root/.hermes 2>/dev/null
+mkdir -p /opt/hermes/data 2>/dev/null
+
+exit 0

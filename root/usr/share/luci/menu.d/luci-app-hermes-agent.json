@@ -1,5 +1,5 @@
 {
-	"admin/services/hermes": {
+	"admin/services/hermes-agent": {
 		"title": "Hermes Agent",
 		"order": 90,
 		"action": {
@@ -7,8 +7,8 @@
 			"path": "hermes"
 		},
 		"depends": {
-			"acl": ["luci-app-hermes"],
-			"uci": { "hermes": true }
+			"acl": ["luci-app-hermes-agent"],
+			"uci": { "hermes_agent": true }
 		}
 	}
 }

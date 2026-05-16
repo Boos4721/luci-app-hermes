@@ -3,6 +3,7 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Project-Id-Version: luci-app-hermes\n"
 "Language: zh_Hans\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
 
 msgid "Active Model"
 msgstr "活跃模型"

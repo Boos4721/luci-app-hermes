@@ -1,4 +1,4 @@
-config hermes 'main'
+config hermes_agent 'main'
 	option enabled '0'
 	option port '3000'
 	option bind 'lan'

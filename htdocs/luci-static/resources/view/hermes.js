@@ -9,8 +9,8 @@
 var HELPER = '/usr/share/hermes/luci-helper';
 
 function callHelper(args) {
-	return L.resolveDefault(fs.exec_direct(HELPER, args), '').then(function(res) {
-		try { return JSON.parse(String(res).trim()); }
+	return L.resolveDefault(fs.exec(HELPER, args), null).then(function(res) {
+		try { return JSON.parse(String((res && res.stdout) || '').trim()); }
 		catch(e) { return {}; }
 	});
 }
@@ -144,7 +144,7 @@ return view.extend({
 
 	load: function() {
 		return Promise.all([
-			uci.load('hermes'),
+			uci.load('hermes_agent'),
 			callHelper(['status'])
 		]);
 	},
@@ -353,13 +353,13 @@ return view.extend({
 	/* ═══ Settings Panel ═══ */
 	_settings: function() {
 		var self = this;
-		var enabled = uci.get('hermes', 'main', 'enabled') === '1';
-		var port = uci.get('hermes', 'main', 'port') || '3000';
-		var bind = uci.get('hermes', 'main', 'bind') || 'lan';
-		var ptyPort = uci.get('hermes', 'main', 'pty_port') || '3001';
-		var apiEndpoint = uci.get('hermes', 'main', 'api_endpoint') || 'https://api.boos.lat/v1';
-		var apiKey = uci.get('hermes', 'main', 'api_key') || '';
-		var model = uci.get('hermes', 'main', 'model') || 'opus4.6';
+		var enabled = uci.get('hermes_agent', 'main', 'enabled') === '1';
+		var port = uci.get('hermes_agent', 'main', 'port') || '3000';
+		var bind = uci.get('hermes_agent', 'main', 'bind') || 'lan';
+		var ptyPort = uci.get('hermes_agent', 'main', 'pty_port') || '3001';
+		var apiEndpoint = uci.get('hermes_agent', 'main', 'api_endpoint') || 'https://api.boos.lat/v1';
+		var apiKey = uci.get('hermes_agent', 'main', 'api_key') || '';
+		var model = uci.get('hermes_agent', 'main', 'model') || 'opus4.6';
 
 		return E('div', { 'class': 'hm-panel', 'data-panel': 'settings' }, [
 			E('div', { 'class': 'hm-form' }, [
@@ -662,13 +662,13 @@ return view.extend({
 		var apiKey = document.getElementById('hm-f-api-key');
 		var model = document.getElementById('hm-f-model');
 
-		uci.set('hermes', 'main', 'enabled', enabled && enabled.checked ? '1' : '0');
-		if (port) uci.set('hermes', 'main', 'port', port.value);
-		if (bind) uci.set('hermes', 'main', 'bind', bind.value);
-		if (ptyPort) uci.set('hermes', 'main', 'pty_port', ptyPort.value);
-		if (apiEndpoint) uci.set('hermes', 'main', 'api_endpoint', apiEndpoint.value);
-		if (apiKey) uci.set('hermes', 'main', 'api_key', apiKey.value);
-		if (model) uci.set('hermes', 'main', 'model', model.value);
+		uci.set('hermes_agent', 'main', 'enabled', enabled && enabled.checked ? '1' : '0');
+		if (port) uci.set('hermes_agent', 'main', 'port', port.value);
+		if (bind) uci.set('hermes_agent', 'main', 'bind', bind.value);
+		if (ptyPort) uci.set('hermes_agent', 'main', 'pty_port', ptyPort.value);
+		if (apiEndpoint) uci.set('hermes_agent', 'main', 'api_endpoint', apiEndpoint.value);
+		if (apiKey) uci.set('hermes_agent', 'main', 'api_key', apiKey.value);
+		if (model) uci.set('hermes_agent', 'main', 'model', model.value);
 
 		return uci.save().then(function() {
 			return uci.apply();

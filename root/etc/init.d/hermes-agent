@@ -30,44 +30,6 @@ _hermes_fix_opt() {
 }
 _hermes_fix_opt
 
-# ── Port listening check ──
-_ensure_port_free() {
-	local p="$1"
-	local i=0 max_wait=3
-
-	# Check if port is already in use
-	if command -v ss >/dev/null 2>&1; then
-		ss -tulnp 2>/dev/null | grep -q ":${p} " || return 0
-	else
-		netstat -tulnp 2>/dev/null | grep -q ":${p} " || return 0
-	fi
-
-	# Port is occupied, try to clean up
-	for hermes_pid in $(pgrep -f "hermes.*gateway" 2>/dev/null); do
-		kill "$hermes_pid" 2>/dev/null
-	done
-
-	while [ $i -lt $max_wait ]; do
-		if command -v ss >/dev/null 2>&1; then
-			ss -tulnp 2>/dev/null | grep -q ":${p} " || return 0
-		else
-			netstat -tulnp 2>/dev/null | grep -q ":${p} " || return 0
-		fi
-		sleep 1
-		i=$((i + 1))
-	done
-
-	# Last resort: SIGKILL
-	local port_pid=""
-	if command -v ss >/dev/null 2>&1; then
-		port_pid=$(ss -tulnp 2>/dev/null | grep ":${p} " | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -1)
-	else
-		port_pid=$(netstat -tulnp 2>/dev/null | grep ":${p} " | sed -n 's|.* \([0-9]*\)/.*|\1|p' | head -1)
-	fi
-	[ -n "$port_pid" ] && kill -9 "$port_pid" 2>/dev/null && sleep 1
-	return 0
-}
-
 port_listening() {
 	local p="$1"
 	if command -v ss >/dev/null 2>&1; then
@@ -80,11 +42,11 @@ port_listening() {
 sync_uci_to_yaml() {
 	# Sync UCI config to /root/.hermes/config.yaml
 	local port bind api_endpoint api_key model
-	port=$(uci -q get hermes.main.port || echo "3000")
-	bind=$(uci -q get hermes.main.bind || echo "lan")
-	api_endpoint=$(uci -q get hermes.main.api_endpoint || echo "https://api.boos.lat/v1")
-	api_key=$(uci -q get hermes.main.api_key || echo "")
-	model=$(uci -q get hermes.main.model || echo "opus4.6")
+	port=$(uci -q get hermes_agent.main.port || echo "3000")
+	bind=$(uci -q get hermes_agent.main.bind || echo "lan")
+	api_endpoint=$(uci -q get hermes_agent.main.api_endpoint || echo "https://api.boos.lat/v1")
+	api_key=$(uci -q get hermes_agent.main.api_key || echo "")
+	model=$(uci -q get hermes_agent.main.model || echo "opus4.6")
 
 	# Map UCI bind to listen address
 	local listen_host="127.0.0.1"
@@ -101,11 +63,11 @@ sync_uci_to_yaml() {
 
 	# Generate token if not set
 	local token
-	token=$(uci -q get hermes.main.token || echo "")
+	token=$(uci -q get hermes_agent.main.token || echo "")
 	if [ -z "$token" ]; then
 		token=$(head -c 24 /dev/urandom | hexdump -e '24/1 "%02x"' 2>/dev/null || openssl rand -hex 24 2>/dev/null || echo "hermes_$(date +%s)")
-		uci set hermes.main.token="$token"
-		uci commit hermes 2>/dev/null
+		uci set hermes_agent.main.token="$token"
+		uci commit hermes_agent 2>/dev/null
 	fi
 
 	# Write config.yaml using shell (no Python dependency at this point)
@@ -145,7 +107,7 @@ YAMLEOF
 
 start_service() {
 	local enabled port bind pty_port api_endpoint api_key model
-	config_load hermes
+	config_load hermes_agent
 	config_get enabled main enabled "0"
 	config_get port main port "3000"
 	config_get bind main bind "lan"
@@ -155,7 +117,7 @@ start_service() {
 	config_get model main model "opus4.6"
 
 	[ "$enabled" = "1" ] || {
-		echo "hermes is disabled. Set enabled to 1 in /etc/config/hermes"
+		echo "hermes-agent is disabled. Set enabled to 1 in /etc/config/hermes_agent"
 		return 0
 	}
 
@@ -176,7 +138,14 @@ start_service() {
 	sync_uci_to_yaml
 
 	# Ensure gateway port is not occupied by stale processes
-	_ensure_port_free "$port"
+	if ! _port_free "$port"; then
+		for hermes_pid in $(pgrep -f "hermes.*gateway" 2>/dev/null); do
+			kill "$hermes_pid" 2>/dev/null
+		done
+		local i=0
+		while [ $i -lt 3 ] && ! _port_free "$port"; do sleep 1; i=$((i+1)); done
+		_port_free "$port" || _kill_port_proc "$port"
+	fi
 
 	# Calculate memory limit based on system RAM
 	local mem_limit=""
@@ -208,16 +177,16 @@ start_service() {
 	procd_set_param respawn 3600 10 5
 	procd_set_param stdout 1
 	procd_set_param stderr 1
-	procd_set_param pidfile /var/run/hermes.pid
+	procd_set_param pidfile /var/run/hermes-agent.pid
 	procd_close_instance
 
 	# Start Web PTY config terminal (auxiliary service)
 	local pty_token
-	pty_token=$(uci -q get hermes.main.pty_token || echo "")
+	pty_token=$(uci -q get hermes_agent.main.pty_token || echo "")
 	if [ -z "$pty_token" ]; then
 		pty_token=$(head -c 16 /dev/urandom | hexdump -e '16/1 "%02x"' 2>/dev/null || openssl rand -hex 16 2>/dev/null || echo "pty_$(date +%s)")
-		uci set hermes.main.pty_token="$pty_token"
-		uci commit hermes 2>/dev/null
+		uci set hermes_agent.main.pty_token="$pty_token"
+		uci commit hermes_agent 2>/dev/null
 	fi
 
 	procd_open_instance "pty"
@@ -232,7 +201,7 @@ start_service() {
 	procd_set_param respawn 3600 5 5
 	procd_set_param stdout 1
 	procd_set_param stderr 1
-	procd_set_param pidfile /var/run/hermes-pty.pid
+	procd_set_param pidfile /var/run/hermes-agent-pty.pid
 	procd_close_instance
 }
 
@@ -273,50 +242,46 @@ _ensure_port_free() {
 	return 0
 }
 
+_kill_port_proc() {
+	local port="$1"
+	local port_pid=""
+	if command -v ss >/dev/null 2>&1; then
+		port_pid=$(ss -tulnp 2>/dev/null | grep ":${port} " | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -1)
+	else
+		port_pid=$(netstat -tulnp 2>/dev/null | grep ":${port} " | sed -n 's|.* \([0-9]*\)/.*|\1|p' | head -1)
+	fi
+	[ -n "$port_pid" ] && kill -9 "$port_pid" 2>/dev/null && sleep 1
+}
+
+_port_free() {
+	local port="$1"
+	if command -v ss >/dev/null 2>&1; then
+		! ss -tulnp 2>/dev/null | grep -q ":${port} "
+	else
+		! netstat -tulnp 2>/dev/null | grep -q ":${port} "
+	fi
+}
+
 stop_service() {
 	local port
-	port=$(uci -q get hermes.main.port || echo "3000")
+	port=$(uci -q get hermes_agent.main.port || echo "3000")
 
-	# Get all related PIDs
-	local gw_pids=""
-	gw_pids=$(pgrep -f "hermes.*gateway" 2>/dev/null)
-	gw_pids="$gw_pids $(pgrep -f "hermes.*gateway.*run" 2>/dev/null)"
-
-	# Send SIGTERM to all processes
-	for pid in $gw_pids; do
+	for pid in $(pgrep -f "hermes.*gateway" 2>/dev/null) \
+	           $(pgrep -f "hermes.*gateway.*run" 2>/dev/null); do
 		[ -n "$pid" ] && kill "$pid" 2>/dev/null
 	done
 
-	# Wait for port to be released
 	local wait_count=0
-	local max_wait=4
-	while [ $wait_count -lt $max_wait ]; do
-		if command -v ss >/dev/null 2>&1; then
-			ss -tulnp 2>/dev/null | grep -q ":${port} " || break
-		else
-			netstat -tulnp 2>/dev/null | grep -q ":${port} " || break
-		fi
+	while [ $wait_count -lt 4 ] && ! _port_free "$port"; do
 		sleep 1
 		wait_count=$((wait_count + 1))
 	done
 
-	# Force kill if still running
-	if [ $wait_count -ge $max_wait ]; then
-		local port_pid=""
-		if command -v ss >/dev/null 2>&1; then
-			port_pid=$(ss -tulnp 2>/dev/null | grep ":${port} " | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -1)
-		else
-			port_pid=$(netstat -tulnp 2>/dev/null | grep ":${port} " | sed -n 's|.* \([0-9]*\)/.*|\1|p' | head -1)
-		fi
-		if [ -n "$port_pid" ]; then
-			kill -9 "$port_pid" 2>/dev/null
-			sleep 1
-		fi
-	fi
+	_port_free "$port" || _kill_port_proc "$port"
 }
 
 service_triggers() {
-	procd_add_reload_trigger "hermes"
+	procd_add_reload_trigger "hermes_agent"
 }
 
 reload_service() {
@@ -331,57 +296,29 @@ setup() {
 }
 
 restart_gateway() {
-	# Restart only the Gateway process, does not affect PTY
-	local port
-	port=$(uci -q get hermes.main.port || echo "3000")
+	local port gw_pid
+	port=$(uci -q get hermes_agent.main.port || echo "3000")
+	gw_pid=$(ubus call service list '{"name":"hermes-agent"}' 2>/dev/null | \
+		jsonfilter -e '$.hermes-agent.instances.gateway.pid' 2>/dev/null) || true
 
-	# Get gateway PID
-	local port_pid="" gw_pid=""
-	if command -v ss >/dev/null 2>&1; then
-		port_pid=$(ss -tulnp 2>/dev/null | grep ":${port} " | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -1)
-	else
-		port_pid=$(netstat -tulnp 2>/dev/null | grep ":${port} " | sed -n 's|.* \([0-9]*\)/.*|\1|p' | head -1)
-	fi
-	gw_pid=$(ubus call service list '{"name":"hermes"}' 2>/dev/null | \
-		jsonfilter -e '$.hermes.instances.gateway.pid' 2>/dev/null) || true
-
-	# Send SIGTERM
-	[ -n "$port_pid" ] && kill "$port_pid" 2>/dev/null
 	[ -n "$gw_pid" ] && kill -0 "$gw_pid" 2>/dev/null && kill "$gw_pid" 2>/dev/null
-
-	# Kill any remaining hermes gateway processes
-	for pid in $(pgrep -f "hermes.*gateway" 2>/dev/null) $(pgrep -f "hermes.*gateway.*run" 2>/dev/null); do
+	for pid in $(pgrep -f "hermes.*gateway" 2>/dev/null); do
 		kill "$pid" 2>/dev/null
 	done
 
-	# Wait for port to be released
 	local wait_count=0
-	while [ $wait_count -lt 3 ]; do
-		if command -v ss >/dev/null 2>&1; then
-			ss -tulnp 2>/dev/null | grep -q ":${port} " || break
-		else
-			netstat -tulnp 2>/dev/null | grep -q ":${port} " || break
-		fi
-		sleep 1
-		wait_count=$((wait_count + 1))
+	while [ $wait_count -lt 3 ] && ! _port_free "$port"; do
+		sleep 1; wait_count=$((wait_count + 1))
 	done
+	_port_free "$port" || _kill_port_proc "$port"
 
-	# Force kill if still running
-	if [ $wait_count -ge 3 ]; then
-		[ -n "$port_pid" ] && kill -9 "$port_pid" 2>/dev/null
-		sleep 1
-	fi
-
-	# If no procd gateway, restart the service
-	if [ -z "$gw_pid" ]; then
-		/etc/init.d/hermes start >/dev/null 2>&1
-	fi
+	[ -z "$gw_pid" ] && /etc/init.d/hermes-agent start >/dev/null 2>&1
 }
 
 status_service() {
 	local port pty_port
-	port=$(uci -q get hermes.main.port || echo "3000")
-	pty_port=$(uci -q get hermes.main.pty_port || echo "3001")
+	port=$(uci -q get hermes_agent.main.port || echo "3000")
+	pty_port=$(uci -q get hermes_agent.main.pty_port || echo "3001")
 
 	echo "=== Hermes Agent Service Status ==="
 

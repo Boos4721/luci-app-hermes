@@ -2,7 +2,7 @@
 	"luci-app-hermes-agent": {
 		"description": "Grant access for luci-app-hermes-agent",
 		"read": {
-			"uci": [ "hermes" ],
+			"uci": [ "hermes_agent" ],
 			"ubus": {
 				"session": [ "access", "login" ],
 				"service": [ "list" ],
@@ -10,20 +10,20 @@
 			},
 			"file": {
 				"/usr/share/hermes/luci-helper": [ "exec" ],
-				"/etc/init.d/hermes": [ "exec" ],
+				"/etc/init.d/hermes-agent": [ "exec" ],
 				"/usr/share/hermes/VERSION": [ "read" ],
 				"/tmp/hermes-setup.log": [ "read" ],
 				"/tmp/hermes-setup.exit": [ "read" ]
 			}
 		},
 		"write": {
-			"uci": [ "hermes" ],
+			"uci": [ "hermes_agent" ],
 			"ubus": {
 				"file": [ "exec" ]
 			},
 			"file": {
 				"/usr/share/hermes/luci-helper": [ "exec" ],
-				"/etc/init.d/hermes": [ "exec" ]
+				"/etc/init.d/hermes-agent": [ "exec" ]
 			}
 		}
 	}
